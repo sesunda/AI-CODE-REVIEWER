@@ -1,0 +1,7 @@
+min_reviewers: 2
+block_on:
+  - security:high
+warn_on:
+  - style:low
+auto_approve_if:
+  - only_docs: true

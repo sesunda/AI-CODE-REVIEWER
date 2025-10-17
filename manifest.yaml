@@ -1,0 +1,208 @@
+name: ai-code-reviewer
+version: 1.0.0
+description: FastAPI-based MCP server for code review using multiple AI agents (linter, security, complexity)
+
+entrypoint:
+  command: python
+  args: ["-m", "uvicorn", "server.main:app", "--port", "8000"]
+
+endpoints:
+  - path: /review
+    method: POST
+    description: Review code diff using multiple AI agents
+    requestBody:
+      type: object
+      properties:
+        diff:
+          type: string
+          description: The unified diff to review
+        repo_meta:
+          type: object
+          description: Repository metadata (optional)
+        files_changed:
+          type: array
+          items:
+            type: string
+          description: List of changed files (optional)
+        store_review:
+          type: boolean
+          description: Whether to store in database
+          default: true
+        generate_audio:
+          type: boolean
+          description: Whether to generate TTS audio
+          default: false
+      required:
+        - diff
+    responses:
+      200:
+        description: Review completed successfully
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                verdict:
+                  type: string
+                  enum: ["approve", "needs_changes", "block"]
+                summary:
+                  type: string
+                findings:
+                  type: array
+                  items:
+                    type: object
+                review_id:
+                  type: string
+                audio:
+                  type: string
+                  description: Base64 encoded audio (if requested)
+      500:
+        description: Internal server error
+
+  - path: /health
+    method: GET
+    description: Health check endpoint
+    responses:
+      200:
+        description: Service is healthy
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ok:
+                  type: boolean
+
+  - path: /demo
+    method: POST
+    description: Demo endpoint for comparing old and new code
+    requestBody:
+      type: object
+      properties:
+        old_code:
+          type: string
+          description: The original code
+        new_code:
+          type: string
+          description: The updated code
+      required:
+        - old_code
+        - new_code
+    responses:
+      200:
+        description: Demo comparison completed
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                service:
+                  type: string
+                version:
+                  type: string
+                status:
+                  type: string
+                features:
+                  type: object
+                  properties:
+                    mcp_server:
+                      type: boolean
+                    database:
+                      type: boolean
+                    tts:
+                      type: boolean
+                    providers:
+                      type: array
+                      items:
+                        type: string
+
+tools:
+  - name: review_diff
+    description: Review a code diff using multiple AI agents (linter, security, complexity)
+    inputSchema:
+      type: object
+      properties:
+        diff:
+          type: string
+          description: The unified diff to review
+        repo_meta:
+          type: object
+          description: Repository metadata (optional)
+          properties:
+            repo:
+              type: string
+            branch:
+              type: string
+            author:
+              type: string
+            only_docs:
+              type: boolean
+        files_changed:
+          type: array
+          items:
+            type: string
+          description: List of changed files (optional)
+        store_review:
+          type: boolean
+          description: Whether to store the review in database
+          default: true
+        generate_audio:
+          type: boolean
+          description: Whether to generate TTS audio summary
+          default: false
+      required:
+        - diff
+
+resources:
+  - uri: ai-code-reviewer://rules/approval
+    name: Approval Rules
+    description: YAML-based approval rules configuration
+    mimeType: application/x-yaml
+
+  - uri: ai-code-reviewer://prompts/system
+    name: System Prompts
+    description: System prompts for code review agents
+    mimeType: text/markdown
+
+  - uri: ai-code-reviewer://prompts/style-guide
+    name: Style Guide
+    description: Code style guidelines and standards
+    mimeType: text/markdown
+
+capabilities:
+  tools: true
+  resources: false
+  logging: true
+
+environment:
+  variables:
+    - name: PROVIDER
+      description: LLM provider (openai or groq)
+      default: openai
+    - name: OPENAI_API_KEY
+      description: OpenAI API key
+      required: false
+    - name: GROQ_API_KEY
+      description: Groq API key
+      required: false
+    - name: MODEL
+      description: OpenAI model name
+      default: gpt-4o-mini
+    - name: MOCK_MODE
+      description: Use mock responses for testing
+      default: "1"
+    - name: DATABASE_BACKEND
+      description: Database backend (convex, supabase, or none)
+      default: none
+    - name: CONVEX_URL
+      description: Convex deployment URL
+      required: false
+    - name: SUPABASE_URL
+      description: Supabase project URL
+      required: false
+    - name: SUPABASE_ANON_KEY
+      description: Supabase anonymous key
+      required: false
+    - name: ELEVENLABS_API_KEY
+      description: ElevenLabs API key for TTS
+      required: false

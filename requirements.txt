@@ -1,0 +1,22 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.8.2
+openai==1.51.0
+PyYAML==6.0.2
+python-dotenv==1.0.1
+
+
+# Optional providers
+groq==0.4.1
+
+
+# Database (choose one; keeping Supabase for now)
+supabase==2.3.0
+
+
+# Text-to-Speech (optional)
+elevenlabs==0.2.26
+
+
+# Rate limiting (optional)
+slowapi==0.1.9
