@@ -2,6 +2,7 @@ import os
 import difflib
 import re
 from typing import Any, Dict, List, Optional
+from difflib import unified_diff
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -25,9 +26,7 @@ def redact(text: str) -> str:
         text = pat.sub("[REDACTED]", text)
     return text
 
-from server.agents import review_async  # use the async reviewer
-from server.database import db_manager, ReviewRecord
-from server.tts import tts_manager, AudioConfig
+from .agents import review_diff
 
 router = APIRouter()
 
@@ -40,85 +39,23 @@ async def health_check():
     return {"ok": True}
 
 
-@router.post("/review", response_model=ReviewOut, tags=["review"], summary="Review a unified diff", description="Runs linter, security, and complexity agents. Honors approval rules and returns a final verdict.")
-async def review_code(payload: ReviewIn = Body(
-    ...,
-    examples={
-        "docs_only": {
-            "summary": "Docs-only change (auto-approve via rules)",
-            "value": {
-                "diff": "@@ -1 +1 @@\n-# Title\n+# Title (doc tweak)\n",
-                "repo_meta": {"only_docs": True},
-                "store_review": False
-            }
-        },
-        "mixed_verdict": {
-            "summary": "1 approve, 1 needs_changes, 1 block (overall block)",
-            "value": {
-                "diff": "@@ -1 +1 @@\n-query = f\"SELECT * FROM users WHERE id={user_input}\"\n+query = db.execute('SELECT * FROM users WHERE id = %s', [user_input])\n",
-                "store_review": False
-            }
-        },
-        "security_block": {
-            "summary": "High-severity security issue (block)",
-            "value": {
-                "diff": "@@ -1 +1 @@\n-password = 'hardcoded'\n+password = os.getenv('APP_PASSWORD')\n",
-                "store_review": False
-            }
-        }
-    }
-)):
-    """Review code diff and return analysis"""
+class ReviewRequest(BaseModel):
+    diff: str
+    repo_meta: Optional[Dict[str, Any]] = None
+    files_changed: Optional[List[str]] = None
+    store_review: Optional[bool] = True
+    generate_audio: Optional[bool] = False
+
+@router.post("/review")
+async def review_code(request: ReviewRequest):
     try:
-        # Validate diff size
-        if len(payload.diff.encode("utf-8")) > MAX_DIFF_BYTES:
-            raise HTTPException(413, "Diff too large; submit smaller chunks.")
-        
-        # Sanitize sensitive data
-        diff = redact(payload.diff)
-        
-        # Run the review
-        result = await review_async(
-            diff=diff,
-            meta=payload.repo_meta,
-            files=payload.files_changed,
+        result = await review_diff(                       # <-- await exactly once
+            diff=request.diff,
+            meta=request.repo_meta or {},
+            files=request.files_changed or [],
         )
-        
-        # Store in database if requested
-        review_id = None
-        if payload.store_review:
-            review_record = ReviewRecord(
-                diff=payload.diff,
-                verdict=result["verdict"],
-                summary=result["summary"],
-                findings=result["findings"],
-                repo_meta=payload.repo_meta or {},
-                files_changed=payload.files_changed or [],
-                provider=os.getenv("PROVIDER", "openai")
-            )
-            review_id = await db_manager.store_review(review_record)
-        
-        # Generate audio if requested
-        audio_base64 = None
-        if payload.generate_audio and tts_manager.enabled:
-            audio_bytes = await tts_manager.generate_review_audio(
-                result["summary"],
-                result["findings"]
-            )
-            if audio_bytes:
-                audio_base64 = tts_manager.audio_to_base64(audio_bytes)
-        
-        # Build response
-        response = {
-            "verdict": result["verdict"],
-            "summary": result["summary"],
-            "findings": result["findings"],
-            "review_id": review_id,
-            "audio": audio_base64
-        }
-        
-        return response
-        
+        # attach review_id/audio here if you have DB/TTS; otherwise just:
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during code review: {e}")
 
@@ -174,49 +111,14 @@ async def get_review(review_id: str):
         raise HTTPException(status_code=500, detail=f"Error retrieving review: {e}")
 
 
-@router.post("/demo", response_model=DemoOut, tags=["demo"], summary="Generate a diff and review it")
-async def demo_code_comparison(payload: DemoIn = Body(
-    ...,
-    examples={
-        "hello_world": {
-            "summary": "Tiny change",
-            "value": {"old_code":"print('hello')\n","new_code":"print('hello, world!')\n"}
-        }
-    }
-)):
-    """Demo endpoint for comparing old and new code"""
-    try:
-        # Generate unified diff using difflib
-        diff_lines = list(difflib.unified_diff(
-            payload.old_code.splitlines(keepends=True),
-            payload.new_code.splitlines(keepends=True),
-            fromfile="old",
-            tofile="new"
-        ))
-        
-        # Convert diff lines to string
-        generated_diff = ''.join(diff_lines)
-        
-        # Validate generated diff size
-        if len(generated_diff.encode("utf-8")) > MAX_DIFF_BYTES:
-            raise HTTPException(413, "Generated diff too large")
-        
-        # Sanitize sensitive data
-        diff = redact(generated_diff)
-        
-        # Run code review on the generated diff
-        review_result = await review_async(
-            diff=diff,
-            meta={}
-        )
-        
-        return {
-            "generated_diff": generated_diff,
-            "review_result": review_result
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error during demo comparison: {e}")
+@router.post("/demo")
+async def demo_diff_review(
+    old_code: str = Body(..., embed=True, example="print('hello')\n"),
+    new_code: str = Body(..., embed=True, example="print('hello, world')\n"),
+):
+    diff = "\n".join(unified_diff(old_code.splitlines(), new_code.splitlines(), fromfile="old", tofile="new", lineterm=""))
+    result = await review_diff(diff=diff, meta={}, files=[])
+    return {"generated_diff": diff, "review_result": result}
 
 
 @router.get("/tts/voices")
@@ -290,5 +192,15 @@ async def mcp_tools():
                 "endpoint": "/demo",
             },
         ]
+    }
+
+
+@router.get("/config")
+def config_view():
+    return {
+        "provider": os.getenv("PROVIDER"),
+        "model": os.getenv("GROQ_MODEL") or os.getenv("MODEL"),
+        "mock_mode": os.getenv("MOCK_MODE"),
+        "db_backend": os.getenv("DATABASE_BACKEND"),
     }
 

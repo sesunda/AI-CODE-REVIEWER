@@ -1,65 +1,43 @@
 # server/agents.py
 import asyncio
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 import yaml
-from server.providers import llm_call  # <— use real provider
+from . import providers  # ensure this import exists (your llm_call lives here)
 
 AGENTS = ["linter", "security", "complexity"]
-
 
 @dataclass
 class AgentFinding:
     agent: str
-    verdict: str  # "approve", "block", "needs_changes"
+    verdict: str   # "approve" | "needs_changes" | "block"
     summary: str
     issues: List[Dict[str, Any]]
 
-
-# --- Agent runner ---
 async def run_agent(agent: str, diff: str, meta: Dict[str, Any]) -> AgentFinding:
-    """Run a specific agent on the diff using role-tailored prompts."""
-    role_prompts = {
-        "linter": (
-            "You are the Linter Agent. Focus on style, naming, dead code, "
-            "docstrings, and cyclomatic complexity ≤ 20.\n"
-        ),
-        "security": (
-            "You are the Security Agent. Prioritize injection, authZ, secrets "
-            "exposure, SSRF, path traversal, and unsafe deserialization.\n"
-        ),
-        "complexity": (
-            "You are the Complexity Agent. Flag long functions (>60 lines), "
-            "deep nesting (>3), duplication, and low testability. Propose refactors.\n"
-        ),
+    prompts = {
+        "linter":    f"Analyze this code diff for linting/style issues:\n{diff}",
+        "security":  f"Review this code diff for security vulnerabilities:\n{diff}",
+        "complexity":f"Assess code complexity and maintainability:\n{diff}",
     }
+    prompt = prompts.get(agent, f"Review code diff:\n{diff}")
 
-    prompt = (
-        role_prompts.get(agent, "You are a code reviewer.\n")
-        + "Repository meta:\n"
-        + f"{meta}\n\n"
-        + "Review the following unified diff and return STRICT JSON with keys: "
-          "verdict, summary, issues, patches. "
-          'issues entries must have {type, severity, title, line, fix}.\n\n'
-        + "DIFF START\n"
-        + diff
-        + "\nDIFF END"
-    )
+    # If providers.llm_call is async, await directly; if sync, wrap with to_thread:
+    if asyncio.iscoroutinefunction(providers.llm_call):
+        result = await providers.llm_call(prompt, role=agent)
+    else:
+        result = await asyncio.to_thread(providers.llm_call, prompt, agent)
 
-    result = await llm_call(prompt)
     return AgentFinding(
         agent=agent,
-        verdict=str(result.get("verdict", "needs_changes")),
-        summary=str(result.get("summary", f"{agent} analysis")),
+        verdict=result.get("verdict", "needs_changes"),
+        summary=result.get("summary", f"{agent} analysis"),
         issues=list(result.get("issues", [])) or [],
     )
 
 
-# --- Majority vote ---
 def majority_vote(findings: List[AgentFinding]) -> str:
-    """Determine verdict based on majority vote with blocking rules."""
     verdicts = [f.verdict for f in findings]
     if "block" in verdicts:
         return "block"
@@ -113,12 +91,9 @@ def _load_rules() -> Dict[str, Any]:
     }
 
 
-def enforce_rules(
-    findings: List[AgentFinding],
-    majority_verdict: str,
-    meta: Dict[str, Any],
-) -> str:
-    """Apply approval rules on top of majority vote."""
+# Optional: simple rules hook; keep your existing enforce_rules if you have it
+def enforce_rules(findings: List[AgentFinding], majority_verdict: str, meta: Dict[str, Any]) -> str:
+    # Keep your yaml-based rules here if already implemented.
     rules = _load_rules()
 
     # Auto-approve on docs-only if enabled
@@ -138,36 +113,19 @@ def enforce_rules(
     return majority_verdict
 
 
-# --- Public API: async + sync wrappers ---
-async def review_async(
-    diff: str,
-    meta: Optional[Dict[str, Any]] = None,
-    files: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """Run all agents concurrently, compute majority, apply rules."""
-    meta = meta or {}
-    files = files or []  # reserved for future use
+async def review_diff(diff: str, meta: Optional[Dict[str, Any]] = None, files: Optional[List[str]] = None) -> Dict[str, Any]:
+    if meta is None: meta = {}
+    if files is None: files = []
 
-    tasks = [run_agent(agent, diff, meta) for agent in AGENTS]
-    findings_objs = await asyncio.gather(*tasks)
+    tasks = [run_agent(a, diff, meta) for a in AGENTS]
+    findings = await asyncio.gather(*tasks)
 
-    majority = majority_vote(findings_objs)
-    verdict = enforce_rules(findings_objs, majority, meta)
+    majority = majority_vote(findings)
+    final_verdict = enforce_rules(findings, majority, meta)
 
-    # Build a short summary and ensure JSON-serializable findings
-    summary = " | ".join(f"{f.agent}: {f.summary}" for f in findings_objs)
-    findings = [asdict(f) for f in findings_objs]
-
-    return {"verdict": verdict, "summary": summary, "findings": findings}
-
-
-def review_diff(
-    diff: str,
-    meta: Optional[Dict[str, Any]] = None,
-    files: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """
-    Synchronous wrapper (good for tests/CLI).
-    FastAPI endpoints should call review_async().
-    """
-    return asyncio.run(review_async(diff, meta, files))
+    summary = " | ".join(f"{f.agent}: {f.summary}" for f in findings)
+    return {
+        "verdict": final_verdict,
+        "summary": summary,
+        "findings": [f.__dict__ for f in findings],
+    }
