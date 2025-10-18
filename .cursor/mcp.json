@@ -3,9 +3,9 @@
     "ai-code-reviewer": {
       "command": "python",
       "args": ["-m", "uvicorn", "server.main:app", "--port", "8000"],
-      "env": { "MOCK_MODE": "1" }
+      "env": {
+        "MOCK_MODE": "0"
+      }
     }
   }
 }
-
-

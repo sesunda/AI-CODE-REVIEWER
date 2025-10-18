@@ -1,27 +1,38 @@
-"""
-Pydantic models for validating LLM output and API responses.
-"""
-
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
-
 class Issue(BaseModel):
-    """Model for individual code review issues"""
-    type: str = Field(..., description="Type of issue (security, style, complexity, etc.)")
-    severity: str = Field(..., description="Severity level (low, medium, high)")
-    title: str = Field(..., description="Brief title describing the issue")
-    line: Optional[int] = Field(None, description="Line number where the issue occurs")
-    fix: Optional[str] = Field(None, description="Suggested fix for the issue")
+    type: str = Field(..., examples=["security", "style", "complexity"])
+    severity: str = Field(..., examples=["low", "medium", "high"])
+    title: Optional[str] = None
+    message: Optional[str] = None
+    line: Optional[int] = None
+    fix: Optional[str] = None
+    agent: Optional[str] = None
 
+class AgentFindingOut(BaseModel):
+    agent: str
+    verdict: str  # approve | needs_changes | block
+    summary: str
+    issues: List[Dict[str, Any]] = []
+
+class ReviewIn(BaseModel):
+    diff: str
+    repo_meta: Optional[Dict[str, Any]] = None
+    files_changed: Optional[List[str]] = None
+    store_review: Optional[bool] = True
+    generate_audio: Optional[bool] = False
 
 class ReviewOut(BaseModel):
-    """Model for complete code review output"""
-    verdict: str = Field(..., description="Overall review verdict (approve, needs_changes, block)")
-    summary: str = Field(..., description="Summary of the review findings")
-    issues: List[Issue] = Field(default=[], description="List of issues found")
-    patches: List = Field(default=[], description="List of suggested patches")
+    verdict: str
+    summary: str
+    findings: List[AgentFindingOut]
+    review_id: Optional[str] = None
 
+class DemoIn(BaseModel):
+    old_code: str
+    new_code: str
 
-# Export for reuse
-__all__ = ["Issue", "ReviewOut"]
+class DemoOut(BaseModel):
+    generated_diff: str
+    review_result: ReviewOut

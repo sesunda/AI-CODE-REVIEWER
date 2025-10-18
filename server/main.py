@@ -1,9 +1,12 @@
 import os
+import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 load_dotenv()
+
+logging.info(f"[Startup] PROVIDER={os.getenv('PROVIDER')} MODEL={os.getenv('GROQ_MODEL') or os.getenv('MODEL')}")
 
 from .router import router
 from .database import db_manager
@@ -26,8 +29,14 @@ IS_PUBLIC_DEPLOYMENT = os.getenv("PUBLIC_DEPLOYMENT", "false").lower() == "true"
 
 app = FastAPI(
     title="AI Code Reviewer",
-    description="FastAPI-based MCP server for code review using multiple AI agents",
-    version="1.0.0"
+    description=(
+        "Multi-agent code review with approval rules. "
+        "Use **/demo** to generate a diff, then **/review** to analyze.\n\n"
+        "MCP discovery routes are available for reference under **/mcp/**.*"
+    ),
+    version="1.0.0",
+    contact={"name": "Hackathon Team", "url": "https://example.com"},
+    license_info={"name": "MIT"},
 )
 
 # Initialize rate limiter if available and enabled

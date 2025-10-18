@@ -2,9 +2,13 @@
 import os
 import json
 import asyncio
+import requests
+import logging
 from typing import Dict, Any, Optional
 
 from server.schemas import ReviewOut
+
+logging.info(f"[Startup] PROVIDER={os.getenv('PROVIDER')} MODEL={os.getenv('GROQ_MODEL') or os.getenv('MODEL')}")
 
 try:
     from openai import OpenAI
@@ -25,6 +29,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 _openai_client = None
 _groq_client = None
+
+# Groq model configuration
+PREFERRED = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+FALLBACKS = ["llama3-70b-8192", "llama-3.1-8b-instant"]  # keep short & current
 
 # Initialize OpenAI client
 if OpenAI and OPENAI_API_KEY and not MOCK_MODE and PROVIDER == "openai":
@@ -145,6 +153,58 @@ def _mock(prompt: str) -> Dict[str, Any]:
                 "title": "Consider adding a docstring",
                 "line": 1,
                 "fix": "Add a short docstring to the function.",
+            }
+        ],
+        "patches": [],
+    }
+
+
+def _groq_chat(model, messages):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    body = {"model": model, "messages": messages, "temperature": 0.1}
+    r = requests.post(url, headers=headers, json=body, timeout=15)
+    if r.status_code == 400 and "model_decommissioned" in r.text:
+        raise RuntimeError("MODEL_DECOMMISSIONED")
+    r.raise_for_status()
+    return r.json()
+
+
+def groq_llm_call(prompt, role="agent"):
+    sys_msg = {"role": "system", "content": "You are a code reviewer. Return strict JSON with keys: verdict, summary, issues[]."}
+    user_msg = {"role": "user", "content": prompt}
+    models_to_try = [PREFERRED] + [m for m in FALLBACKS if m != PREFERRED]
+    last_err = None
+    for m in models_to_try:
+        try:
+            data = _groq_chat(m, [sys_msg, user_msg])
+            content = data["choices"][0]["message"]["content"]
+            return json.loads(content)  # you already have a retry-if-JSON-fails path
+        except RuntimeError as e:
+            # try next model if decommissioned
+            last_err = e
+            continue
+        except Exception as e:
+            last_err = e
+            break
+    # final fallback to your mock handler
+    result = get_fallback_response()
+    result["issues"][0]["message"] = f"LLM call failed: {last_err}"
+    return result
+
+
+def get_fallback_response():
+    """Fallback response when all models fail"""
+    return {
+        "verdict": "needs_changes",
+        "summary": "All LLM models failed, using fallback response.",
+        "issues": [
+            {
+                "type": "tool",
+                "severity": "medium",
+                "title": "LLM response handling issue",
+                "line": None,
+                "fix": "Retry or run locally in MOCK_MODE=1",
             }
         ],
         "patches": [],

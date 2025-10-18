@@ -7,6 +7,8 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional, Sequence
 from dataclasses import dataclass
+from mcp.types import TextContent
+
 
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
@@ -232,31 +234,33 @@ async def list_resources() -> List[Resource]:
 
 
 @server.read_resource()
-async def read_resource(uri: str) -> str:
-    """Read MCP resources"""
+async def read_resource(uri: str):
+    def wrap(text: str):
+        return [TextContent(type="text", text=text)]
+
     if uri == "ai-code-reviewer://rules/approval":
         try:
             with open("server/rules/approval_rules.yaml", "r", encoding="utf-8") as f:
-                return f.read()
+                return wrap(f.read())
         except FileNotFoundError:
-            return "# No approval rules configured"
-    
+            return wrap("# No approval rules configured")
+
     elif uri == "ai-code-reviewer://prompts/system":
         try:
             with open("server/prompts/reviewer_system.md", "r", encoding="utf-8") as f:
-                return f.read()
+                return wrap(f.read())
         except FileNotFoundError:
-            return "# No system prompts configured"
-    
+            return wrap("# No system prompts configured")
+
     elif uri == "ai-code-reviewer://prompts/style-guide":
         try:
             with open("server/prompts/style_guide.md", "r", encoding="utf-8") as f:
-                return f.read()
+                return wrap(f.read())
         except FileNotFoundError:
-            return "# No style guide configured"
-    
+            return wrap("# No style guide configured")
+
     else:
-        raise ValueError(f"Unknown resource: {uri}")
+        return wrap(f"Unknown resource: {uri}")
 
 
 async def main():

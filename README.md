@@ -162,6 +162,25 @@ MOCK_MODE=1 python start_mcp_server.py
 2. Create a `reviews` table
 3. Configure `SUPABASE_URL` and `SUPABASE_ANON_KEY`
 
+## Phase 9 – Verification
+
+Start:
+  .venv\Scripts\activate
+  python -m uvicorn server.main:app --reload --port 8000
+
+Manual checks:
+  - http://127.0.0.1:8000/docs (try /demo and /review)
+  - GET /mcp/tools
+  - GET /mcp/resources/rules/approval
+
+Automated checks:
+  - python -m pytest -q
+  - python scripts/smoke_check.py  (server must be running)
+
+Notes:
+  - Set MOCK_MODE=1 in .env for deterministic demos.
+  - Keep store_review=false unless DATABASE_BACKEND is configured.
+
 ## License
 
 MIT License - see LICENSE file for details.
